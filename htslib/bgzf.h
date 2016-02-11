@@ -398,6 +398,13 @@ typedef struct __kstring_t {
     int bgzf_index_dump_hfile(BGZF *fp, struct hFILE *idx,
                               const char *name) HTS_RESULT_USED;
 
+    /**
+     * Returns the hFILE connected to a BGZF
+     */
+    static inline struct hFILE *bgzf_hfile(BGZF *fp) {
+        return fp->fp;
+    }
+
 #ifdef __cplusplus
 }
 #endif

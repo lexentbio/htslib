@@ -180,6 +180,33 @@ char *hgets(char *buffer, int size, hFILE *fp) HTS_RESULT_USED;
 
 The characters peeked at remain in the stream's internal buffer, and will be
 returned by later hread() etc calls.
+
+/*!
+  @abstract  Resizes the buffer within an hFILE.
+
+  @notes  Changes the buffer size for an hFILE.  Ideally this is done
+  immediately after opening.  If performed later, this function may
+  fail if we are reducing the buffer size and the current offset into
+  the buffer is beyond the new capacity.
+
+  @param fp        The file stream
+  @param bufsiz    The size of the new bufsiz
+
+  @return Returns 0 on success, -1 on failure.
+ */
+int hfile_set_blksize(hFILE *fp, size_t capacity);
+
+/*!
+  @abstract  Peek at characters to be read without removing them from buffers
+  @param fp      The file stream
+  @param buffer  The buffer to which the peeked bytes will be written
+  @param nbytes  The number of bytes to peek at; limited by the size of the
+    internal buffer, which could be as small as 4K.
+  @return    The number of bytes peeked, which may be less than nbytes if EOF
+    is encountered; or negative, if there was an I/O error.
+  @notes  The characters peeked at remain in the stream's internal buffer,
+    and will be returned by later hread() etc calls.
+
 */
 ssize_t hpeek(hFILE *fp, void *buffer, size_t nbytes) HTS_RESULT_USED;
 
