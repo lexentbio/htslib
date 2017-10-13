@@ -33,6 +33,7 @@ DEALINGS IN THE SOFTWARE.  */
 
 #include <pthread.h>
 
+#include "htslib/hts.h"
 #include "htslib/hfile.h"
 #include "hfile_internal.h"
 
@@ -170,6 +171,8 @@ static ssize_t refill_buffer(hFILE *fp)
     if (fp->at_eof || fp->end == fp->limit) n = 0;
     else {
         n = fp->backend->read(fp, fp->end, fp->limit - fp->end);
+        if (hts_verbose >= 8)
+          hts_log_info("fetch: %p, nbytes: %lu, got: %lu", fp, fp->limit - fp->end, n);
         if (n < 0) { fp->has_errno = errno; return n; }
         else if (n == 0) fp->at_eof = 1;
     }
@@ -295,6 +298,8 @@ ssize_t hread2(hFILE *fp, void *destv, size_t nbytes, size_t nread)
     const size_t capacity = fp->limit - fp->buffer;
     int buffer_invalidated = 0;
     char *dest = (char *) destv;
+    int nread_orig = nread;
+    int nbytes_orig = nbytes;
     dest += nread, nbytes -= nread;
 
     // Read large requests directly into the destination buffer
@@ -320,6 +325,8 @@ ssize_t hread2(hFILE *fp, void *destv, size_t nbytes, size_t nread)
     while (nbytes > 0 && !fp->at_eof) {
         size_t n;
         ssize_t ret = refill_buffer(fp);
+        if (ret < 0 && hts_verbose >= 8)
+          hts_log_warning("fp: %p, n: %d, read: %d -> %lu", fp, nbytes_orig, nread_orig, ret);
         if (ret < 0) return ret;
 
         n = fp->end - fp->begin;
@@ -403,6 +410,9 @@ int hputs2(const char *text, size_t totalbytes, size_t ncopied, hFILE *fp)
 off_t hseek(hFILE *fp, off_t offset, int whence)
 {
     off_t curpos, pos;
+
+    if (hts_verbose >= 8)
+        hts_log_info("fp: %p, mode: %s, seek to: %llu", fp, whence  == 2 ? "END" : whence == 0 ? "SET" : "CUR", offset);
 
     if (writebuffer_is_nonempty(fp)) {
         int ret = flush_buffer(fp);
@@ -913,6 +923,7 @@ static const struct hFILE_scheme_handler *find_scheme_handler(const char *s)
 hFILE *hopen(const char *fname, const char *mode, ...)
 {
     const struct hFILE_scheme_handler *handler = find_scheme_handler(fname);
+
     if (handler) {
         if (strchr(mode, ':') == NULL) return handler->open(fname, mode);
         else if (handler->priority >= 2000 && handler->vopen) {

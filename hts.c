@@ -51,6 +51,8 @@ DEALINGS IN THE SOFTWARE.  */
 #include "htslib/ksort.h"
 
 KHASH_INIT2(s2i,, kh_cstr_t, int64_t, 1, kh_str_hash_func, kh_str_hash_equal)
+BGZF *hts_get_bgzfp(htsFile *fp);
+
 
 int hts_verbose = HTS_LOG_WARNING;
 
@@ -442,7 +444,9 @@ error:
 }
 
 htsFile *hts_open(const char *fn, const char *mode) {
-    return hts_open_format(fn, mode, NULL);
+    htsFile *fp;
+    fp = hts_open_format(fn, mode, NULL);
+    return fp;
 }
 
 /*
@@ -784,6 +788,9 @@ htsFile *hts_hopen(hFILE *hfile, const char *fn, const char *mode)
     fp->fn = strdup(fn);
     fp->is_be = ed_is_big();
 
+    if (hts_verbose >= 8)
+        hts_log_info("Start: %s, mode: %s", fn, mode);
+
     // Split mode into simple_mode,opts strings
     if ((cp = strchr(mode, ','))) {
         strncpy(simple_mode, mode, cp-mode <= 100 ? cp-mode : 100);
@@ -877,6 +884,9 @@ htsFile *hts_hopen(hFILE *hfile, const char *fn, const char *mode)
     // instead close it in hts_close(), but this a simplifying optimisation)
     if (hfile != hfile_orig) hclose_abruptly(hfile_orig);
 
+    if (hts_verbose >= 8)
+        hts_log_info("End: %s, mode: %s, fp: %p, hfile_fp: %p, bgfz_fp: %p", fn, mode, fp, hfile, fp->fp.bgzf);
+
     return fp;
 
 error:
@@ -896,6 +906,9 @@ error:
 int hts_close(htsFile *fp)
 {
     int ret, save;
+
+    if (hts_verbose >= 8)
+        hts_log_info("fp: %p bgzf_fp: %p", fp, hts_get_bgzfp(fp));
 
     switch (fp->format.format) {
     case binary_format:
@@ -1034,8 +1047,6 @@ int hts_set_opt(htsFile *fp, enum hts_fmt_option opt, ...) {
 
     return r;
 }
-
-BGZF *hts_get_bgzfp(htsFile *fp);
 
 int hts_set_threads(htsFile *fp, int n)
 {
@@ -1961,6 +1972,10 @@ hts_itr_t *hts_itr_query(const hts_idx_t *idx, int tid, int beg, int end, hts_re
     bidx_t *bidx;
     uint64_t min_off, max_off;
     hts_itr_t *iter = 0;
+
+    if (hts_verbose >= 8)
+        hts_log_info("idx: %p, tid: %d, beg: %d, end: %d", idx, tid, beg, end);
+
     if (tid < 0) {
         int finished0 = 0;
         uint64_t off0 = (uint64_t)-1;
@@ -2096,6 +2111,22 @@ hts_itr_t *hts_itr_query(const hts_idx_t *idx, int tid, int beg, int end, hts_re
     }
     n_off = l + 1;
     iter->n_off = n_off; iter->off = off;
+
+    if (hts_verbose >= 8) {
+        int i = 0;
+        hts_log_info("iter idx: %p, iter: finished: %d, read_rest: %d, curr: (%d:%d-%d@0x%llX), "
+                     "inst: (%d:%d-%d), i: %d, n_off: %d",
+                    idx, iter->finished, iter->read_rest,
+                    iter->curr_tid, iter->curr_beg, iter->curr_end, iter->curr_off,
+                    iter->tid, iter->beg, iter->end,
+                    iter->i, iter->n_off);
+        for (; i < iter->n_off; i++) {
+          hts_log_info("idx: %p, iter[%d]: %p+%d, %p+%d", idx, i,
+              iter->off[i].u >> 16, iter->off[i].u & 0xFFFF,
+              iter->off[i].v >> 16, iter->off[i].v & 0xFFFF);
+        }
+    }
+
     return iter;
 }
 
@@ -2211,6 +2242,7 @@ hts_itr_t *hts_itr_querys(const hts_idx_t *idx, const char *reg, hts_name2id_f g
 int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data)
 {
     int ret, tid, beg, end;
+
     if (iter == NULL || iter->finished) return -1;
     if (iter->read_rest) {
         if (iter->curr_off) { // seek to the start
@@ -2228,9 +2260,20 @@ int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data)
     assert(iter->off != NULL);
     for (;;) {
         if (iter->curr_off == 0 || iter->curr_off >= iter->off[iter->i].v) { // then jump to the next chunk
+            if (hts_verbose >= 8) {
+              hts_log_info("Jump to next chunk: %d (-1 for curr_off = 0)", iter->i);
+            }
+
             if (iter->i == iter->n_off - 1) { ret = -1; break; } // no more chunks
             if (iter->i < 0 || iter->off[iter->i].v != iter->off[iter->i+1].u) { // not adjacent chunks; then seek
                 if (bgzf_seek(fp, iter->off[iter->i+1].u, SEEK_SET) < 0) return -2;
+                if (hts_verbose >= 8)
+                  hts_log_info("GRAB MORE: bgzf_fp: %p, iter: finished: %d, read_rest: %d, curr: (%d:%d-%d@0x%llX), "
+                               "inst: (%d:%d-%d@%d), i: %d, n_off: %d, offset: %p",
+                    fp, iter->finished, iter->read_rest,
+                    iter->curr_tid, iter->curr_beg, iter->curr_end, iter->curr_off,
+                    iter->tid, iter->beg, iter->end, iter->n_off,
+                    iter->i, iter->n_off, iter->off);
                 iter->curr_off = bgzf_tell(fp);
             }
             ++iter->i;
@@ -2247,6 +2290,10 @@ int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data)
             }
         } else break; // end of file or error
     }
+
+    if (hts_verbose >= 8)
+      hts_log_info("fp: %p, finished: %d", fp, ret);
+
     iter->finished = 1;
     return ret;
 }
