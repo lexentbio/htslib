@@ -191,14 +191,22 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "[E::%s] fail to parse region '%s'\n", __func__, argv[i]);
                 continue;
             }
-            while ((r = sam_itr_next(in, iter, b)) >= 0) {
-                if (!benchmark && sam_write1(out, h, b) < 0) {
-                    fprintf(stderr, "Error writing output.\n");
-                    exit_code = 1;
-                    break;
-                }
-                if (nreads && --nreads == 0)
-                    break;
+
+            while (1) {
+              while ((r = sam_itr_next(in, iter, b)) >= 0) {
+                  if (!benchmark && sam_write1(out, h, b) < 0) {
+                      fprintf(stderr, "Error writing output.\n");
+                      exit_code = 1;
+                      break;
+                  }
+                  if (nreads && --nreads == 0)
+                      break;
+              }
+              if (r == -2) {
+                continue;
+              } else {
+                break;
+              }
             }
             hts_itr_destroy(iter);
             if (r < -1) {
