@@ -191,15 +191,35 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "[E::%s] fail to parse region '%s'\n", __func__, argv[i]);
                 continue;
             }
-            while ((r = sam_itr_next(in, iter, b)) >= 0) {
-                if (!benchmark && sam_write1(out, h, b) < 0) {
-                    fprintf(stderr, "Error writing output.\n");
-                    exit_code = 1;
-                    break;
-                }
-                if (nreads && --nreads == 0)
-                    break;
+            fprintf(stderr, "GET ITER: iter: finished: %d, read_rest: %d, curr: (%d:%d-%d@0x%llX), "
+                         "inst: (%d:%d-%d@%d), i: %d, n_off: %d, offset: %p\n",
+              iter->finished, iter->read_rest,
+              iter->curr_tid, iter->curr_beg, iter->curr_end, iter->curr_off,
+              iter->tid, iter->beg, iter->end, iter->n_off,
+              iter->i, iter->n_off, iter->off);
+
+            while (1) {
+              while ((r = sam_itr_next(in, iter, b)) >= 0) {
+                  if (!benchmark && sam_write1(out, h, b) < 0) {
+                      fprintf(stderr, "Error writing output.\n");
+                      exit_code = 1;
+                      break;
+                  }
+                  if (nreads && --nreads == 0)
+                      break;
+              }
+              if (r == -2) {
+                continue;
+              } else {
+                break;
+              }
             }
+            fprintf(stderr, "DONE ITER: iter: finished: %d, read_rest: %d, curr: (%d:%d-%d@0x%llX), "
+                         "inst: (%d:%d-%d@%d), i: %d, n_off: %d, offset: %p\n",
+              iter->finished, iter->read_rest,
+              iter->curr_tid, iter->curr_beg, iter->curr_end, iter->curr_off,
+              iter->tid, iter->beg, iter->end, iter->n_off,
+              iter->i, iter->n_off, iter->off);
             hts_itr_destroy(iter);
             if (r < -1) {
               break;
