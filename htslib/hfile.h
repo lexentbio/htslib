@@ -31,6 +31,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <sys/types.h>
 
 #include "hts_defs.h"
+#include "hts_log.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -202,7 +203,10 @@ hread(hFILE *fp, void *buffer, size_t nbytes)
     if (n > nbytes) n = nbytes;
     memcpy(buffer, fp->begin, n);
     fp->begin += n;
-    return (n == nbytes)? (ssize_t) n : hread2(fp, buffer, nbytes, n);
+    size_t k = (n == nbytes)? (ssize_t) n : hread2(fp, buffer, nbytes, n);
+
+    hts_log_info("%p, read: %lu (cache: %lu, fetch: %lu), in-buffer: %lu\n", fp, k, n, k-n, fp->end - fp->begin);
+    return k;
 }
 
 /// Write a character to the stream

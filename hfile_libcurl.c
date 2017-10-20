@@ -719,6 +719,7 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
     char *buffer = (char *) bufferv;
     CURLcode err;
+    size_t nbytes_tmp = nbytes;
 
     fp->buffer.ptr.rd = buffer;
     fp->buffer.len = nbytes;
@@ -739,6 +740,7 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
         return -1;
     }
 
+    hts_log_info("%p, bytes asked: %lu, returned: %lu", fpv, nbytes_tmp, nbytes);
     return nbytes;
 }
 

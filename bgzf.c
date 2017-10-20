@@ -1582,7 +1582,8 @@ int64_t bgzf_seek(BGZF* fp, int64_t pos, int where)
     } else {
         int64_t current_block_address = htell(fp->fp);
 
-        hts_log_info("bzfp_htell: %lu current: (%lu + %d), want: (%lu + %d)\n",
+        hts_log_info("Seek: %p bzfp_htell: %lld htell: (%lld + %d), want: (%lld + %d)\n",
+          fp->fp,
           bgzf_htell(fp),
           current_block_address, fp->block_offset,
           block_address, block_offset);

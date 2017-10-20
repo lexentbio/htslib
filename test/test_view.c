@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     int nthreads = 0; // shared pool
     int num_reads = 0;
 
-    hts_set_log_level(3);
+    hts_set_log_level(8);
 
     while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:")) >= 0) {
         switch (c) {
@@ -240,8 +240,6 @@ int main(int argc, char *argv[])
             break;
     }
 
-    printf("READ %d\n", num_reads);
-
     if (r < -1) {
         fprintf(stderr, "Error parsing input.\n");
         exit_code = 1;
@@ -261,6 +259,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error closing input.\n");
         exit_code = 1;
     }
+
+    fprintf(stderr, "READ %d\n", num_reads);
 
     if (p.pool)
         hts_tpool_destroy(p.pool);

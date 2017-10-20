@@ -2121,7 +2121,7 @@ hts_itr_t *hts_itr_query(const hts_idx_t *idx, int tid, int beg, int end, hts_re
                     iter->tid, iter->beg, iter->end,
                     iter->i, iter->n_off);
         for (; i < iter->n_off; i++) {
-          hts_log_info("idx: %p, iter[%d]: %p+%d, %p+%d", idx, i,
+          hts_log_info("idx: %p, iter[%d]: %lld + %lld, %lld + %lld\n", idx, i,
               iter->off[i].u >> 16, iter->off[i].u & 0xFFFF,
               iter->off[i].v >> 16, iter->off[i].v & 0xFFFF);
         }
@@ -2260,20 +2260,18 @@ int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data)
     assert(iter->off != NULL);
     for (;;) {
         if (iter->curr_off == 0 || iter->curr_off >= iter->off[iter->i].v) { // then jump to the next chunk
-            if (hts_verbose >= 8) {
-              hts_log_info("Jump to next chunk: %d (-1 for curr_off = 0)", iter->i);
-            }
-
             if (iter->i == iter->n_off - 1) { ret = -1; break; } // no more chunks
             if (iter->i < 0 || iter->off[iter->i].v != iter->off[iter->i+1].u) { // not adjacent chunks; then seek
                 if (bgzf_seek(fp, iter->off[iter->i+1].u, SEEK_SET) < 0) return -2;
                 if (hts_verbose >= 8)
-                  hts_log_info("GRAB MORE: bgzf_fp: %p, iter: finished: %d, read_rest: %d, curr: (%d:%d-%d@0x%llX), "
-                               "inst: (%d:%d-%d@%d), i: %d, n_off: %d, offset: %p",
-                    fp, iter->finished, iter->read_rest,
+                  hts_log_info("[%d] %p Seek: done "
+                               "to (%lld + %lld) "
+                               " (%d:%d-%d@%lld), "
+                               "inst: (%d:%d-%d@%d). Reading rec now..",
+                    iter->i, fp->fp,
+                    iter->off[iter->i+1].u >> 16, iter->off[iter->i+1].u & 0xFFFF,
                     iter->curr_tid, iter->curr_beg, iter->curr_end, iter->curr_off,
-                    iter->tid, iter->beg, iter->end, iter->n_off,
-                    iter->i, iter->n_off, iter->off);
+                    iter->tid, iter->beg, iter->end, iter->n_off);
                 iter->curr_off = bgzf_tell(fp);
             }
             ++iter->i;
@@ -2292,7 +2290,7 @@ int hts_itr_next(BGZF *fp, hts_itr_t *iter, void *r, void *data)
     }
 
     if (hts_verbose >= 8)
-      hts_log_info("fp: %p, finished: %d", fp, ret);
+      hts_log_info("fp: %p, ret: %d", fp->fp, ret);
 
     iter->finished = 1;
     return ret;
