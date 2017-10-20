@@ -59,6 +59,7 @@ typedef struct {
 
 // For the authorization header cache
 KHASH_MAP_INIT_STR(auth_map, auth_token *);
+static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence);
 
 // Curl-compatible header linked list
 typedef struct {
@@ -98,6 +99,7 @@ typedef struct {
     unsigned is_read : 1;   // Opened in read mode
     unsigned can_seek : 1;  // Can (attempt to) seek on this handle
     unsigned is_recursive:1; // Opened by hfile_libcurl itself
+    off_t seek_offset;
     int nrunning;
     http_headers headers;
 } hFILE_libcurl;
@@ -714,6 +716,13 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     char *buffer = (char *) bufferv;
     CURLcode err;
 
+    if (fp->seek_offset >= 0) {
+      if (libcurl_seek(fpv, fp->seek_offset, SEEK_SET) < 0) {
+        return -1;
+      }
+      fp->seek_offset = -1;
+    }
+
     fp->buffer.ptr.rd = buffer;
     fp->buffer.len = nbytes;
     fp->paused = 0;
@@ -735,6 +744,7 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     return nbytes;
 }
 
+
 static size_t send_callback(char *ptr, size_t size, size_t nmemb, void *fpv)
 {
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
@@ -753,11 +763,19 @@ static size_t send_callback(char *ptr, size_t size, size_t nmemb, void *fpv)
     return n;
 }
 
+
 static ssize_t libcurl_write(hFILE *fpv, const void *bufferv, size_t nbytes)
 {
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
     const char *buffer = (const char *) bufferv;
     CURLcode err;
+
+    if (fp->seek_offset >= 0) {
+      if (libcurl_seek(fpv, fp->seek_offset, SEEK_SET) < 0) {
+        return -1;
+      }
+      fp->seek_offset = -1;
+    }
 
     fp->buffer.ptr.wr = buffer;
     fp->buffer.len = nbytes;
@@ -779,6 +797,8 @@ static ssize_t libcurl_write(hFILE *fpv, const void *bufferv, size_t nbytes)
 
     return nbytes;
 }
+
+
 
 static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
 {
@@ -942,6 +962,18 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
     return -1;
 }
 
+
+static off_t libcurl_seek_lazy(hFILE *fpv, off_t offset, int whence)
+{
+  hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
+  if (whence == SEEK_SET && offset != -1) {
+    fp->seek_offset = offset;
+    return offset;
+  }
+
+  return libcurl_seek(fpv, offset, whence);
+}
+
 static int libcurl_close(hFILE *fpv)
 {
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
@@ -980,9 +1012,10 @@ static int libcurl_close(hFILE *fpv)
     else return 0;
 }
 
+
 static const struct hFILE_backend libcurl_backend =
 {
-    libcurl_read, libcurl_write, libcurl_seek, NULL, libcurl_close
+    libcurl_read, libcurl_write, libcurl_seek_lazy, NULL, libcurl_close
 };
 
 static hFILE *
@@ -1015,6 +1048,7 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
         memset(&fp->headers, 0, sizeof(fp->headers));
     }
 
+    fp->seek_offset = -1;
     fp->file_size = -1;
     fp->buffer.ptr.rd = NULL;
     fp->buffer.len = 0;
