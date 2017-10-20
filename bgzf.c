@@ -40,6 +40,7 @@
 #include "htslib/hfile.h"
 #include "htslib/thread_pool.h"
 #include "htslib/hts_endian.h"
+#include "cram/misc.h"
 #include "cram/pooled_alloc.h"
 
 #define BGZF_CACHE
@@ -214,6 +215,7 @@ static BGZF *bgzf_read_init(hFILE *hfpr)
     fp->compressed_block = (char *)fp->uncompressed_block + BGZF_MAX_BLOCK_SIZE;
     fp->is_compressed = (n==18 && magic[0]==0x1f && magic[1]==0x8b);
     fp->is_gzip = ( !fp->is_compressed || ((magic[3]&4) && memcmp(&magic[12], "BC\2\0",4)==0) ) ? 0 : 1;
+    fp->max_seek_size = BGZF_MAX_SEEK_SIZE;
 #ifdef BGZF_CACHE
     fp->cache = kh_init(cache);
 #endif
@@ -602,6 +604,27 @@ static off_t bgzf_htell(BGZF *fp) {
     } else {
         return htell(fp->fp);
     }
+}
+
+static int bgzf_skip(BGZF *fp, int64_t bytes_to_skip) {
+    ssize_t nread;
+    uint8_t *tmp_buffer = malloc(BGZF_MAX_BLOCK_SIZE);
+    if (tmp_buffer == NULL) {
+        return -1;
+    }
+
+    while (bytes_to_skip > 0) {
+        if((nread = hread(fp->fp, tmp_buffer, MIN(bytes_to_skip, BGZF_MAX_BLOCK_SIZE))) > 0) {
+            bytes_to_skip -= nread;
+            continue;
+        }
+        break;
+    }
+
+    free(tmp_buffer);
+    fp->block_clength = 0; // Invalidate any compressed data
+    if (bytes_to_skip == 0) return 0;
+    return (nread == 0) ? 0 : -2; // Potential EOF
 }
 
 int bgzf_read_block(BGZF *fp)
@@ -1492,6 +1515,11 @@ void bgzf_set_cache_size(BGZF *fp, int cache_size)
     if (fp) fp->cache_size = cache_size;
 }
 
+void bgzf_set_max_seek_size(BGZF *fp, int seek_size)
+{
+    if (fp) fp->max_seek_size = seek_size;
+}
+
 int bgzf_check_EOF(BGZF *fp) {
     int has_eof;
 
@@ -1552,10 +1580,35 @@ int64_t bgzf_seek(BGZF* fp, int64_t pos, int where)
 
         pthread_mutex_unlock(&fp->mt->command_m);
     } else {
+        int64_t current_block_address = htell(fp->fp);
+
+        hts_log_info("bzfp_htell: %lu current: (%lu + %d), want: (%lu + %d)\n",
+          bgzf_htell(fp),
+          current_block_address, fp->block_offset,
+          block_address, block_offset);
+
+        // Nothing to do if requesting the current offset
+        if (current_block_address == block_address) {
+            goto success;
+        }
+
+        if (fp->fp->remote) {
+            if (block_address > current_block_address) {
+                // For remote files its advantageous to not teardown and re-setup connections on
+                // seek, but rather use the existing connection and skip to the target offset.
+                if (block_address - current_block_address < fp->max_seek_size) {
+                    int r = bgzf_skip(fp, block_address - current_block_address);
+                    if (r < 0) return r;
+                    goto success;
+                }
+            }
+        }
+
         if (hseek(fp->fp, block_address, SEEK_SET) < 0) {
             fp->errcode |= BGZF_ERR_IO;
             return -1;
         }
+success:
         fp->block_length = 0;  // indicates current block has not been loaded
         fp->block_address = block_address;
         fp->block_offset = block_offset;
