@@ -130,7 +130,8 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     if (has_EOF < 0) {
         perror("[W::bam_hdr_read] bgzf_check_EOF");
     } else if (has_EOF == 0) {
-        hts_log_warning("EOF marker is absent. The input is probably truncated");
+        hts_log_warning("%p: EOF marker is absent. The input is probably truncated", fp->fp);
+        exit(1);
     }
     // read "BAM1"
     magic_len = bgzf_read(fp, buf, 4);

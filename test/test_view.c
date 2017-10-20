@@ -58,6 +58,9 @@ int main(int argc, char *argv[])
     int extra_hdr_nuls = 0;
     int benchmark = 0;
     int nthreads = 0; // shared pool
+    int num_reads = 0;
+
+    hts_set_log_level(8);
 
     while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:")) >= 0) {
         switch (c) {

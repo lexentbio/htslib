@@ -43,6 +43,7 @@ extern "C" {
 
 #define BGZF_BLOCK_SIZE     0xff00 // make sure compressBound(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
 #define BGZF_MAX_BLOCK_SIZE 0x10000
+#define BGZF_MAX_SEEK_SIZE (2*1024*1024) // 2MB read skip
 
 #define BGZF_ERR_ZLIB   1
 #define BGZF_ERR_HEADER 2
@@ -62,6 +63,7 @@ struct BGZF {
     signed compress_level:9;
     unsigned last_block_eof:1, is_compressed:1, is_gzip:1;
     int cache_size;
+    int max_seek_size; // read size under which remote seek will be optimized
     int block_length, block_clength, block_offset;
     int64_t block_address, uncompressed_address;
     void *uncompressed_block, *compressed_block;
@@ -252,6 +254,15 @@ typedef struct __kstring_t {
      * @param size  size of cache in bytes; 0 to disable caching (default)
      */
     void bgzf_set_cache_size(BGZF *fp, int size);
+
+    /**
+     * Set the max read size for remote file seek optimizations. Reads over
+     * this length will not be optimized.
+     *
+     * @param fp    BGZF file handler
+     * @param size  size of max seek in bytes
+     */
+    void bgzf_set_max_seek_size(BGZF *fp, int seek_size);
 
     /**
      * Flush the file if the remaining buffer size is smaller than _size_

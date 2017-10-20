@@ -63,6 +63,7 @@ DEALINGS IN THE SOFTWARE.  */
    unsigned at_eof:1;// For reading, whether EOF has been seen
    unsigned mobile:1;// Buffer is a mobile window or fixed full contents
    unsigned readonly:1;// Whether opened as "r" rather than "r+"/"w"/"a"
+   unsigned remote:1;// Whether target is on a remote server
    int has_errno;    // Error number from the last failure on this stream
 
 For reading, begin is the first unread character in the buffer and end is the
@@ -111,6 +112,7 @@ hFILE *hfile_init(size_t struct_size, const char *mode, size_t capacity)
     fp->offset = 0;
     fp->at_eof = 0;
     fp->mobile = 1;
+    fp->remote = 0;
     fp->readonly = (strchr(mode, 'r') && ! strchr(mode, '+'));
     fp->has_errno = 0;
     return fp;
@@ -133,6 +135,7 @@ hFILE *hfile_init_fixed(size_t struct_size, const char *mode,
     fp->offset = 0;
     fp->at_eof = 1;
     fp->mobile = 0;
+    fp->remote = 0;
     fp->readonly = (strchr(mode, 'r') && ! strchr(mode, '+'));
     fp->has_errno = 0;
     return fp;
@@ -404,6 +407,8 @@ off_t hseek(hFILE *fp, off_t offset, int whence)
 {
     off_t curpos, pos;
 
+    hts_log_info("fp: %p, mode: %s, seek to: %lld", fp, whence  == 2 ? "END" : whence == 0 ? "SET" : "CUR", offset);
+
     if (writebuffer_is_nonempty(fp)) {
         int ret = flush_buffer(fp);
         if (ret < 0) return ret;
@@ -419,6 +424,7 @@ off_t hseek(hFILE *fp, off_t offset, int whence)
             // Either a negative offset resulted in a position before the
             // start of the file, or we overflowed when given a positive offset
             fp->has_errno = errno = (offset < 0)? EINVAL : EOVERFLOW;
+            hts_log_error("%p, SEEK FAILED! errno: %d", fp, errno);
             return -1;
         }
 
@@ -429,6 +435,7 @@ off_t hseek(hFILE *fp, off_t offset, int whence)
     // so that seeking can be avoided for all (within range) requests.
     else if (! fp->mobile && whence == SEEK_END) {
         size_t length = fp->end - fp->buffer;
+        hts_log_info("Seek end, length: %ld, offset: %ld", length, offset);
         if (offset > 0 || -offset > length) {
             fp->has_errno = errno = EINVAL;
             return -1;
@@ -608,6 +615,7 @@ static hFILE *hopen_fd(const char *filename, const char *mode)
     fp->fd = fd;
     fp->is_socket = 0;
     fp->base.backend = &fd_backend;
+    fp->base.remote = hisremote(filename);
     return &fp->base;
 
 error:
@@ -624,6 +632,7 @@ hFILE *hdopen(int fd, const char *mode)
     fp->fd = fd;
     fp->is_socket = (strchr(mode, 's') != NULL);
     fp->base.backend = &fd_backend;
+    fp->base.remote = 0;
     return &fp->base;
 }
 
@@ -741,6 +750,7 @@ static hFILE *hopen_mem(const char *url, const char *mode)
     if (fp == NULL) { free(buffer); return NULL; }
 
     fp->base.backend = &mem_backend;
+    fp->base.remote = 0;
     return &fp->base;
 }
 
@@ -912,21 +922,23 @@ static const struct hFILE_scheme_handler *find_scheme_handler(const char *s)
 
 hFILE *hopen(const char *fname, const char *mode, ...)
 {
+    hFILE *fp = NULL;
     const struct hFILE_scheme_handler *handler = find_scheme_handler(fname);
     if (handler) {
-        if (strchr(mode, ':') == NULL) return handler->open(fname, mode);
+        if (strchr(mode, ':') == NULL) fp = handler->open(fname, mode);
         else if (handler->priority >= 2000 && handler->vopen) {
-            hFILE *fp;
             va_list arg;
             va_start(arg, mode);
             fp = handler->vopen(fname, mode, arg);
             va_end(arg);
-            return fp;
         }
-        else { errno = ENOTSUP; return NULL; }
+        else { errno = ENOTSUP; }
     }
-    else if (strcmp(fname, "-") == 0) return hopen_fd_stdinout(mode);
-    else return hopen_fd(fname, mode);
+    else if (strcmp(fname, "-") == 0) fp = hopen_fd_stdinout(mode);
+    else fp = hopen_fd(fname, mode);
+
+    if (fp) fp->remote = hisremote(fname);
+    return fp;
 }
 
 int hfile_always_local (const char *fname) { return 0; }
