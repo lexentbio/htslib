@@ -533,6 +533,15 @@ static void free_cache(BGZF *fp)
     kh_destroy(cache, h);
 }
 
+static cache_t* get_block_in_cache(BGZF *fp, int64_t block_address)
+{
+    khint_t k;
+    khash_t(cache) *h = (khash_t(cache)*)fp->cache;
+    k = kh_get(cache, h, block_address);
+    if (k == kh_end(h)) return NULL;
+    return &kh_val(h, k);
+}
+
 static int load_block_from_cache(BGZF *fp, int64_t block_address)
 {
     khint_t k;
@@ -547,12 +556,22 @@ static int load_block_from_cache(BGZF *fp, int64_t block_address)
     fp->block_length = p->size;
     // FIXME: why BGZF_MAX_BLOCK_SIZE and not p->size?
     memcpy(fp->uncompressed_block, p->block, BGZF_MAX_BLOCK_SIZE);
-    if ( hseek(fp->fp, p->end_offset, SEEK_SET) < 0 )
-    {
-        // todo: move the error up
-        hts_log_error("Could not hseek to %"PRId64"", p->end_offset);
-        exit(1);
+
+    // TODO: Seek optimization for multi-threading case
+    //
+    // For non-multi-threading use-cases, we don't seek-ahead to accomodate for a
+    // cache-hit at the next block request. On remote connections hseek() could
+    // re-establish a (costly) new connection. Since subsequent reads will be
+    // fetched from the cache, there is no harm in not setting the fp offset now.
+    if (fp->mt || (!fp->mt && !fp->fp->remote)) {
+      if ( hseek(fp->fp, p->end_offset, SEEK_SET) < 0 ) {
+          // todo: move the error up
+          hts_log_error("Could not hseek to %"PRId64"", p->end_offset);
+          exit(1);
+      }
     }
+
+    fp->uncompressed_address = block_address;
     return p->size;
 }
 
@@ -564,6 +583,18 @@ static void cache_block(BGZF *fp, int size)
     //fprintf(stderr, "Cache block at %llx\n", (int)fp->block_address);
     khash_t(cache) *h = (khash_t(cache)*)fp->cache;
     if (BGZF_MAX_BLOCK_SIZE >= fp->cache_size) return;
+
+    // Don't cache duplicate blocks
+    k = kh_get(cache, h, fp->block_address);
+    if (k != kh_end(h)) {
+      if (k < size) { // prefer caching the larger block
+        free(kh_val(h, k).block);
+        kh_del(cache, h, k);
+      } else {
+        return;
+      }
+    }
+
     if ((kh_size(h) + 1) * BGZF_MAX_BLOCK_SIZE > (uint32_t)fp->cache_size) {
         /* A better way would be to remove the oldest block in the
          * cache, but here we remove a random one for simplicity. This
@@ -585,6 +616,7 @@ static void cache_block(BGZF *fp, int size)
 }
 #else
 static void free_cache(BGZF *fp) {}
+static cache_t* get_block_in_cache(BGZF *fp, int64_t block_address) {return NULL;}
 static int load_block_from_cache(BGZF *fp, int64_t block_address) {return 0;}
 static void cache_block(BGZF *fp, int size) {}
 #endif
@@ -602,7 +634,7 @@ static off_t bgzf_htell(BGZF *fp) {
         pthread_mutex_unlock(&fp->mt->job_pool_m);
         return pos;
     } else {
-        return htell(fp->fp);
+        return fp->block_address + fp->block_length;
     }
 }
 
@@ -749,7 +781,22 @@ int bgzf_read_block(BGZF *fp)
         fp->block_address = block_address;
         return 0;
     }
-    if (fp->cache_size && load_block_from_cache(fp, block_address)) return 0;
+    if ( fp->cache_size && load_block_from_cache(fp, block_address) ) return 0;
+
+    // For seek optimization case, if we had a cache-miss, re-establish connection to right offset
+    if ( !fp->mt && fp->fp->remote && htell(fp->fp) != block_address) {
+        printf("SEEKING FAILURE: current: (%lu + %d = %lu) block_address: %lu, length: %d offset: %u\n",
+          fp->fp->offset, fp->fp->end - fp->fp->buffer,
+          fp->fp->offset + fp->fp->end - fp->fp->buffer,
+          fp->block_address, fp->block_length, fp->block_offset);
+        /*
+        if (hseek(fp->fp, block_address, SEEK_SET) < 0 ) {
+          fp->errcode |= BGZF_ERR_IO;
+          return -1;
+        }
+        fp->block_length = 0;
+        */
+    }
 
     // loop to skip empty bgzf blocks
     while (1)
@@ -1594,6 +1641,7 @@ int64_t bgzf_seek(BGZF* fp, int64_t pos, int where)
         }
 
         if (fp->fp->remote) {
+            cache_t *c;
             if (block_address > current_block_address) {
                 // For remote files its advantageous to not teardown and re-setup connections on
                 // seek, but rather use the existing connection and skip to the target offset.
@@ -1602,6 +1650,12 @@ int64_t bgzf_seek(BGZF* fp, int64_t pos, int where)
                     if (r < 0) return r;
                     goto success;
                 }
+            }
+            else if (get_block_in_cache(fp, block_address)) {
+              // Even though the seek is to a previous offset to where the file handle is
+              // at, if all the blocks between the two offsets are cached, we can safely
+              // seek to that region without setting up a new remote connection.
+              goto success;
             }
         }
 
