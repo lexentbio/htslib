@@ -407,7 +407,7 @@ off_t hseek(hFILE *fp, off_t offset, int whence)
 {
     off_t curpos, pos;
 
-    hts_log_info("fp: %p, mode: %s, seek to: %lld", fp, whence  == 2 ? "END" : whence == 0 ? "SET" : "CUR", offset);
+    hts_log_info("fp: %p, mode: %s, seek to: %lld", fp, whence  == SEEK_END ? "END" : whence == SEEK_SET ? "SET" : "CUR", offset);
 
     if (writebuffer_is_nonempty(fp)) {
         int ret = flush_buffer(fp);

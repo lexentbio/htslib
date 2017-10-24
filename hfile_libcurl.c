@@ -99,9 +99,16 @@ typedef struct {
     unsigned is_read : 1;   // Opened in read mode
     unsigned can_seek : 1;  // Can (attempt to) seek on this handle
     unsigned is_recursive:1; // Opened by hfile_libcurl itself
-    off_t seek_offset;
+    unsigned is_seek_delayed:1; // Opened by hfile_libcurl itself
+    unsigned is_buffer_cache_enabled: 1;
+
     int nrunning;
     http_headers headers;
+    char *buffer_cache;
+    char *buffer_cache_begin;
+    unsigned buffer_cache_length;
+    off_t seek_offset;
+    off_t current_seek_offset;
 } hFILE_libcurl;
 
 static int http_status_errno(int status)
@@ -715,12 +722,47 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
     char *buffer = (char *) bufferv;
     CURLcode err;
+    size_t nbytes_tmp = nbytes;
+    size_t cache_nbytes = 0;
 
-    if (fp->seek_offset >= 0) {
-      if (libcurl_seek(fpv, fp->seek_offset, SEEK_SET) < 0) {
-        return -1;
+    // Reset file handle state to pre-seek conditions.
+    if (fp->is_seek_delayed) {
+        if (fp->current_seek_offset == fp->seek_offset) {
+            hts_log_info("fp: %p Seek skipped! Set current_seek_offset: %lld, length: %d",
+              fpv, fp->current_seek_offset, fp->buffer_cache_length);
+            if (fp->buffer_cache_length > 0) {
+                fp->is_buffer_cache_enabled = 1;
+                fp->buffer_cache_begin = fp->buffer_cache;
+            }
+        } else {
+            if (libcurl_seek(fpv, fp->seek_offset, SEEK_SET) < 0) {
+              return -1;
+            }
+            fp->is_buffer_cache_enabled = 0;
+            fp->current_seek_offset = fp->seek_offset;
+        }
+
+        fp->is_seek_delayed = 0;
+    }
+
+    if (fp->is_buffer_cache_enabled) {
+      cache_nbytes = fp->buffer_cache_length;
+      if (cache_nbytes > nbytes) cache_nbytes = nbytes;
+      memcpy(buffer, fp->buffer_cache_begin, cache_nbytes);
+      fp->buffer_cache_begin += cache_nbytes;
+      fp->buffer_cache_length -= cache_nbytes;
+      buffer += cache_nbytes;
+      nbytes -= cache_nbytes;
+
+      hts_log_info("fp: %p read from buffer cache: %d", fpv, cache_nbytes);
+      if (nbytes <= 0) {
+          assert(nbytes == 0);
+          return cache_nbytes;
       }
-      fp->seek_offset = -1;
+
+      hts_log_info("fp: %p reading more from file handle: %d", fpv, nbytes);
+      fp->is_buffer_cache_enabled = 0;
+      fp->buffer_cache_begin = NULL;
     }
 
     fp->buffer.ptr.rd = buffer;
@@ -741,7 +783,8 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
         return -1;
     }
 
-    return nbytes;
+    hts_log_info("%p, bytes asked: %lu, returned: %lu", fpv, nbytes_tmp, nbytes + cache_nbytes);
+    return nbytes + cache_nbytes;
 }
 
 
@@ -770,11 +813,12 @@ static ssize_t libcurl_write(hFILE *fpv, const void *bufferv, size_t nbytes)
     const char *buffer = (const char *) bufferv;
     CURLcode err;
 
-    if (fp->seek_offset >= 0) {
+    if (fp->is_seek_delayed) {
       if (libcurl_seek(fpv, fp->seek_offset, SEEK_SET) < 0) {
         return -1;
       }
-      fp->seek_offset = -1;
+      fp->is_seek_delayed = 0;
+      fp->current_seek_offset = fp->seek_offset;
     }
 
     fp->buffer.ptr.wr = buffer;
@@ -938,6 +982,9 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
     fp->finished = temp_fp.finished;
     fp->perform_again = temp_fp.perform_again;
     fp->final_result = temp_fp.final_result;
+    fp->is_seek_delayed = 0;
+    fp->current_seek_offset = pos;
+    fp->is_buffer_cache_enabled = 0;
 
     return pos;
 
@@ -966,8 +1013,20 @@ static off_t libcurl_seek(hFILE *fpv, off_t offset, int whence)
 static off_t libcurl_seek_lazy(hFILE *fpv, off_t offset, int whence)
 {
   hFILE_libcurl *fp = (hFILE_libcurl *) fpv;
-  if (whence == SEEK_SET && offset != -1) {
+  hts_log_info("fp: %p, offset: %d, whence: %d", fpv, offset, whence);
+  if (whence == SEEK_SET) {
     fp->seek_offset = offset;
+    if (fp->is_seek_delayed == 0) {
+      fp->current_seek_offset = htell(fpv);
+      memcpy(fp->buffer_cache, fp->base.begin, fp->base.end - fp->base.begin);
+      fp->buffer_cache_length = fp->base.end - fp->base.begin;
+      fp->is_seek_delayed = 1;
+      fp->is_buffer_cache_enabled = 0;
+
+      hts_log_info("fp: %p, set current_seek_offset: %lld, buffer begin,end,limit: %p, %p, %p, %p, length: %d",
+        fpv, fp->current_seek_offset,
+        fp->base.buffer, fp->base.begin, fp->base.end, fp->base.limit, fp->buffer_cache_length);
+    }
     return offset;
   }
 
@@ -1002,6 +1061,10 @@ static int libcurl_close(hFILE *fpv)
 
     curl_easy_cleanup(fp->easy);
     curl_multi_cleanup(fp->multi);
+
+    free(fp->buffer_cache);
+    fp->buffer_cache_begin = NULL;
+    fp->buffer_cache_length = 0;
 
     if (fp->headers.callback) // Tell callback to free any data it needs to
         fp->headers.callback(fp->headers.callback_data, NULL);
@@ -1048,7 +1111,9 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
         memset(&fp->headers, 0, sizeof(fp->headers));
     }
 
-    fp->seek_offset = -1;
+    fp->is_seek_delayed = 0;
+    fp->seek_offset = 0;
+    fp->current_seek_offset = 0;
     fp->file_size = -1;
     fp->buffer.ptr.rd = NULL;
     fp->buffer.len = 0;
@@ -1058,6 +1123,12 @@ libcurl_open(const char *url, const char *modes, http_headers *headers)
     fp->is_recursive = is_recursive;
     fp->nrunning = 0;
     fp->easy = NULL;
+
+    int buffer_cache_size = fp->base.limit - fp->base.buffer;
+    fp->buffer_cache = malloc(buffer_cache_size);
+    if (fp->buffer_cache == NULL) { errno = ENOMEM; goto error; }
+    fp->buffer_cache_length = 0;
+    fp->buffer_cache_begin = NULL;
 
     fp->multi = curl_multi_init();
     if (fp->multi == NULL) { errno = ENOMEM; goto error; }
