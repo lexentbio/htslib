@@ -217,6 +217,8 @@ static BGZF *bgzf_read_init(hFILE *hfpr)
     fp->is_gzip = ( !fp->is_compressed || ((magic[3]&4) && memcmp(&magic[12], "BC\2\0",4)==0) ) ? 0 : 1;
     fp->max_seek_size = BGZF_MAX_SEEK_SIZE;
 #ifdef BGZF_CACHE
+    fp->cache_size = 100*1024*1024;
+    hts_log_info("Set cache to: %d", fp->cache_size);
     fp->cache = kh_init(cache);
 #endif
     return fp;
