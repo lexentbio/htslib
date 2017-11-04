@@ -1025,6 +1025,11 @@ static off_t libcurl_seek_lazy(hFILE *fpv, off_t offset, int whence)
     fp->seek_offset = offset;
     if (fp->is_seek_delayed == 0) {
       fp->current_seek_offset = htell(fpv);
+
+      if (fp->current_seek_offset > offset && (fp->current_seek_offset - offset) < 2*1024*1024) {
+        // Flush cache and read more if required to simulate a seek.
+      }
+
       memcpy(fp->buffer_cache, fp->base.begin, fp->base.end - fp->base.begin);
       fp->buffer_cache_length = fp->base.end - fp->base.begin;
       fp->is_seek_delayed = 1;
