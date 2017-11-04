@@ -32,6 +32,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <errno.h>
 #include <zlib.h>
 #include <assert.h>
+#include "htslib/hts.h"
 #include "htslib/sam.h"
 #include "htslib/bgzf.h"
 #include "cram/cram.h"
@@ -130,7 +131,7 @@ bam_hdr_t *bam_hdr_read(BGZF *fp)
     if (has_EOF < 0) {
         perror("[W::bam_hdr_read] bgzf_check_EOF");
     } else if (has_EOF == 0) {
-        hts_log_warning("EOF marker is absent. The input is probably truncated");
+        hts_log_warning("%p: EOF marker is absent. The input is probably truncated", fp->fp);
     }
     // read "BAM1"
     magic_len = bgzf_read(fp, buf, 4);
@@ -1177,9 +1178,14 @@ err_ret:
 
 int sam_read1(htsFile *fp, bam_hdr_t *h, bam1_t *b)
 {
+    if (hts_verbose >= 8)
+      hts_log_info("sam_read1: fp: %p, format: %d", fp, fp->format.format);
+
     switch (fp->format.format) {
     case bam: {
         int r = bam_read1(fp->fp.bgzf, b);
+        if (hts_verbose >= 8)
+            hts_log_info("sam_read1: bam_read1 returned: %d", r);
         if (r >= 0) {
             if (b->core.tid  >= h->n_targets || b->core.tid  < -1 ||
                 b->core.mtid >= h->n_targets || b->core.mtid < -1)

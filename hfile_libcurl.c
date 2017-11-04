@@ -656,9 +656,15 @@ static void process_messages(hFILE_libcurl *fp)
         case CURLMSG_DONE:
             fp->finished = 1;
             fp->final_result = msg->data.result;
+            if (hts_verbose >= 8)
+              hts_log_info("Process Messages: fp: %p, errno: %d, msg: %d, result: %d",
+                fp, errno, msg->msg, msg->data.result);
             break;
 
         default:
+            if (hts_verbose >= 8)
+                hts_log_warning("Error Process Messages: fp: %p, errno: %d, msg: %d, result: %d",
+                  fp, errno, msg->msg, msg->data.result);
             break;
         }
     }
@@ -768,6 +774,7 @@ static ssize_t libcurl_read(hFILE *fpv, void *bufferv, size_t nbytes)
     fp->buffer.ptr.rd = buffer;
     fp->buffer.len = nbytes;
     fp->paused = 0;
+
     err = curl_easy_pause(fp->easy, CURLPAUSE_CONT);
     if (err != CURLE_OK) { errno = easy_errno(fp->easy, err); return -1; }
 
@@ -1071,6 +1078,8 @@ static int libcurl_close(hFILE *fpv)
     free_headers(&fp->headers.fixed, 1);
     free_headers(&fp->headers.extra, 1);
 
+    if (hts_verbose >= 8)
+        hts_log_warning("fp: %p, errno: %d, err: %d, errm: %d", fpv, save_errno, err, errm);
     if (save_errno) { errno = save_errno; return -1; }
     else return 0;
 }

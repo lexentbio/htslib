@@ -1554,6 +1554,11 @@ int64_t bgzf_seek(BGZF* fp, int64_t pos, int where)
 
         pthread_mutex_unlock(&fp->mt->command_m);
     } else {
+        hts_log_info("bzfp_htell: %lu current: (%lu + %d), want: (%lu + %d)",
+          bgzf_htell(fp),
+          htell(fp->fp), fp->block_offset,
+          block_address, block_offset);
+
         if (hseek(fp->fp, block_address, SEEK_SET) < 0) {
             fp->errcode |= BGZF_ERR_IO;
             return -1;

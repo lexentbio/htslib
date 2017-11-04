@@ -58,6 +58,9 @@ int main(int argc, char *argv[])
     int extra_hdr_nuls = 0;
     int benchmark = 0;
     int nthreads = 0; // shared pool
+    int num_reads = 0;
+
+    //hts_set_log_level(3);
 
     while ((c = getopt(argc, argv, "DSIt:i:bCl:o:N:BZ:@:")) >= 0) {
         switch (c) {
@@ -194,6 +197,7 @@ int main(int argc, char *argv[])
 
             while (1) {
               while ((r = sam_itr_next(in, iter, b)) >= 0) {
+                  num_reads++;
                   if (!benchmark && sam_write1(out, h, b) < 0) {
                       fprintf(stderr, "Error writing output.\n");
                       exit_code = 1;
@@ -243,6 +247,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error closing input.\n");
         exit_code = 1;
     }
+
+    //fprintf(stderr, "READ %d\n", num_reads);
 
     if (p.pool)
         hts_tpool_destroy(p.pool);
